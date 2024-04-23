@@ -17,6 +17,7 @@ import { CancellationProvider, DefaultCancellationProvider } from '../common/can
 import { CommandLineOptions } from '../common/commandLineOptions';
 import { BasedConfigOptions, ConfigOptions, matchFileSpecs } from '../common/configOptions';
 import { ConsoleInterface, LogLevel, StandardConsole, log } from '../common/console';
+import { isString } from '../common/core';
 import { Diagnostic } from '../common/diagnostic';
 import { FileEditAction } from '../common/editAction';
 import { EditableProgram, ProgramView } from '../common/extensibility';
@@ -25,8 +26,8 @@ import { FileWatcher, FileWatcherEventType, ignoredWatchEventFunction } from '..
 import { Host, HostFactory, NoAccessHost } from '../common/host';
 import { defaultStubsDirectory } from '../common/pathConsts';
 import { getFileName, isRootedDiskPath, normalizeSlashes } from '../common/pathUtils';
+import { ServiceKeys } from '../common/serviceKeys';
 import { ServiceProvider } from '../common/serviceProvider';
-import { ServiceKeys } from '../common/serviceProviderExtensions';
 import { Range } from '../common/textRange';
 import { timingStats } from '../common/timing';
 import { Uri } from '../common/uri/uri';
@@ -143,8 +144,7 @@ export class AnalyzerService {
         this._options.hostFactory = options.hostFactory ?? (() => new NoAccessHost());
 
         this._options.configOptions =
-            options.configOptions ??
-            new BasedConfigOptions(Uri.file(process.cwd(), this._serviceProvider.fs().isCaseSensitive));
+            options.configOptions ?? new BasedConfigOptions(Uri.file(process.cwd(), this._serviceProvider));
         const importResolver = this._options.importResolverFactory(
             this._serviceProvider,
             this._options.configOptions,
@@ -273,11 +273,11 @@ export class AnalyzerService {
         this._backgroundAnalysisProgram.setCompletionCallback(callback);
     }
 
-    setOptions(commandLineOptions: CommandLineOptions, newRoot?: Uri): void {
+    setOptions(commandLineOptions: CommandLineOptions): void {
         this._commandLineOptions = commandLineOptions;
 
         const host = this._hostFactory();
-        const configOptions = this._getConfigOptions(host, commandLineOptions, newRoot);
+        const configOptions = this._getConfigOptions(host, commandLineOptions);
 
         if (configOptions.pythonPath) {
             // Make sure we have default python environment set.
@@ -353,7 +353,11 @@ export class AnalyzerService {
         this._backgroundAnalysisProgram.addInterimFile(uri);
     }
 
-    getParseResult(uri: Uri) {
+    getParserOutput(uri: Uri) {
+        return this._program.getParserOutput(uri);
+    }
+
+    getParseResults(uri: Uri) {
         return this._program.getParseResults(uri);
     }
 
@@ -514,10 +518,14 @@ export class AnalyzerService {
 
     // Calculates the effective options based on the command-line options,
     // an optional config file, and default values.
-    private _getConfigOptions(host: Host, commandLineOptions: CommandLineOptions, possibleRoot?: Uri): ConfigOptions {
-        const executionRootUri =
-            possibleRoot ??
-            Uri.file(commandLineOptions.executionRoot, this.fs.isCaseSensitive, /* checkRelative */ true);
+    private _getConfigOptions(host: Host, commandLineOptions: CommandLineOptions): ConfigOptions {
+        const optionRoot = commandLineOptions.executionRoot;
+        const executionRootUri = Uri.is(optionRoot)
+            ? optionRoot
+            : isString(optionRoot)
+            ? Uri.file(optionRoot, this.serviceProvider, /* checkRelative */ true)
+            : Uri.empty();
+
         const executionRoot = this.fs.realCasePath(executionRootUri);
         let projectRoot = executionRoot;
         let configFilePath: Uri | undefined;
@@ -529,7 +537,7 @@ export class AnalyzerService {
             // or a file.
             configFilePath = this.fs.realCasePath(
                 isRootedDiskPath(commandLineOptions.configFilePath)
-                    ? Uri.file(commandLineOptions.configFilePath, this.fs.isCaseSensitive, /* checkRelative */ true)
+                    ? Uri.file(commandLineOptions.configFilePath, this.serviceProvider, /* checkRelative */ true)
                     : projectRoot.resolvePaths(commandLineOptions.configFilePath)
             );
             if (!this.fs.existsSync(configFilePath)) {
@@ -590,7 +598,7 @@ export class AnalyzerService {
                 `Setting pythonPath for service "${this._instanceName}": ` + `"${commandLineOptions.pythonPath}"`
             );
             configOptions.pythonPath = this.fs.realCasePath(
-                Uri.file(commandLineOptions.pythonPath, this.fs.isCaseSensitive, /* checkRelative */ true)
+                Uri.file(commandLineOptions.pythonPath, this.serviceProvider, /* checkRelative */ true)
             );
         }
 
@@ -711,7 +719,7 @@ export class AnalyzerService {
             configOptions.include = [];
             commandLineOptions.includeFileSpecsOverride.forEach((include) => {
                 configOptions.include.push(
-                    getFileSpec(Uri.file(include, this.fs.isCaseSensitive, /* checkRelative */ true), '.')
+                    getFileSpec(Uri.file(include, this.serviceProvider, /* checkRelative */ true), '.')
                 );
             });
         }
@@ -1140,7 +1148,7 @@ export class AnalyzerService {
     }
 
     private _matchFiles(include: FileSpec[], exclude: FileSpec[]): Uri[] {
-        const envMarkers = [['bin', 'activate'], ['Scripts', 'activate'], ['pyvenv.cfg']];
+        const envMarkers = [['bin', 'activate'], ['Scripts', 'activate'], ['pyvenv.cfg'], ['conda-meta']];
         const results: Uri[] = [];
         const startTime = Date.now();
         const longOperationLimitInSec = 10;
@@ -1286,7 +1294,7 @@ export class AnalyzerService {
                         return;
                     }
 
-                    let uri = Uri.file(path, this.fs.isCaseSensitive, /* checkRelative */ true);
+                    let uri = Uri.file(path, this.serviceProvider, /* checkRelative */ true);
 
                     // Make sure path is the true case.
                     uri = this.fs.realCasePath(uri);
@@ -1472,7 +1480,7 @@ export class AnalyzerService {
                         return;
                     }
 
-                    const uri = Uri.file(path, this.fs.isCaseSensitive, /* checkRelative */ true);
+                    const uri = Uri.file(path, this.serviceProvider, /* checkRelative */ true);
 
                     if (!this._shouldHandleLibraryFileWatchChanges(uri, watchList)) {
                         return;

@@ -201,7 +201,7 @@ test('Builtins1', () => {
         'ellipsis',
     ];
 
-    const moduleScope = AnalyzerNodeInfo.getScope(analysisResults[0].parseResults!.parseTree)!;
+    const moduleScope = AnalyzerNodeInfo.getScope(analysisResults[0].parseResults!.parserOutput.parseTree)!;
     assert.notStrictEqual(moduleScope, undefined);
 
     const builtinsScope = moduleScope.parent!;
@@ -933,7 +933,7 @@ test('FunctionMember2', () => {
 test('Annotations1', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['annotations1.py']);
 
-    TestUtils.validateResults(analysisResults, 16);
+    TestUtils.validateResults(analysisResults, 19);
 });
 
 test('Annotations2', () => {
@@ -1185,6 +1185,12 @@ test('Property16', () => {
 
 test('Property17', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['property17.py']);
+
+    TestUtils.validateResults(analysisResults, 0);
+});
+
+test('Property18', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['property18.py']);
 
     TestUtils.validateResults(analysisResults, 0);
 });

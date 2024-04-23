@@ -111,7 +111,7 @@ export function applyTextEditsToString(
 export function applyWorkspaceEdit(program: EditableProgram, edits: WorkspaceEdit, filesChanged: Map<string, Uri>) {
     if (edits.changes) {
         for (const kv of Object.entries(edits.changes)) {
-            const fileUri = Uri.parse(kv[0], program.configOptions.projectRoot.isCaseSensitive);
+            const fileUri = Uri.parse(kv[0], program.serviceProvider);
             const fileInfo = program.getSourceFileInfo(fileUri);
             if (!fileInfo || !fileInfo.isTracked) {
                 // We don't allow non user file being modified.
@@ -127,14 +127,14 @@ export function applyWorkspaceEdit(program: EditableProgram, edits: WorkspaceEdi
     if (edits.documentChanges) {
         for (const change of edits.documentChanges) {
             if (TextDocumentEdit.is(change)) {
-                const fileUri = Uri.parse(change.textDocument.uri, program.configOptions.projectRoot.isCaseSensitive);
+                const fileUri = Uri.parse(change.textDocument.uri, program.serviceProvider);
                 const fileInfo = program.getSourceFileInfo(fileUri);
                 if (!fileInfo || !fileInfo.isTracked) {
                     // We don't allow non user file being modified.
                     continue;
                 }
 
-                applyDocumentChanges(program, fileInfo, change.edits);
+                applyDocumentChanges(program, fileInfo, change.edits.filter((e) => TextEdit.is(e)) as TextEdit[]);
                 filesChanged.set(fileUri.key, fileUri);
             }
 
@@ -193,7 +193,7 @@ export function generateWorkspaceEdit(
 
         edits.changes![encodeUri(fs, uri)] = [
             {
-                range: convertTextRangeToRange(parseResults.parseTree, parseResults.tokenizerOutput.lines),
+                range: convertTextRangeToRange(parseResults.parserOutput.parseTree, parseResults.tokenizerOutput.lines),
                 newText: final.getFileContent() ?? '',
             },
         ];

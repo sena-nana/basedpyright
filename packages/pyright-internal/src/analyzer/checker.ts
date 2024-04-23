@@ -90,7 +90,7 @@ import {
     YieldNode,
     isExpressionNode,
 } from '../parser/parseNodes';
-import { ParseResults } from '../parser/parser';
+import { ParserOutput } from '../parser/parser';
 import { UnescapeError, UnescapeErrorType, getUnescapedString } from '../parser/stringTokenUtils';
 import { OperatorType, StringTokenFlags, TokenType } from '../parser/tokenizerTypes';
 import { AnalyzerFileInfo } from './analyzerFileInfo';
@@ -115,7 +115,7 @@ import { SourceMapper, isStubFile } from './sourceMapper';
 import { evaluateStaticBoolExpression } from './staticExpressions';
 import { Symbol } from './symbol';
 import * as SymbolNameUtils from './symbolNameUtils';
-import { getLastTypedDeclaredForSymbol } from './symbolUtils';
+import { getLastTypedDeclarationForSymbol } from './symbolUtils';
 import { maxCodeComplexity } from './typeEvaluator';
 import {
     FunctionArgument,
@@ -226,13 +226,13 @@ export class Checker extends ParseTreeWalker {
     constructor(
         private _importResolver: ImportResolver,
         private _evaluator: TypeEvaluator,
-        private _parseResults: ParseResults,
+        parseResults: ParserOutput,
         private _sourceMapper: SourceMapper,
-        private _dependentFiles?: ParseResults[]
+        private _dependentFiles?: ParserOutput[]
     ) {
         super();
 
-        this._moduleNode = _parseResults.parseTree;
+        this._moduleNode = parseResults.parseTree;
         this._fileInfo = AnalyzerNodeInfo.getFileInfo(this._moduleNode)!;
     }
 
@@ -2107,10 +2107,6 @@ export class Checker extends ParseTreeWalker {
             return;
         }
 
-        if (isNever(leftType) || isNever(rightType)) {
-            return;
-        }
-
         const getMessage = () => {
             return node.operator === OperatorType.Equals
                 ? LocMessage.comparisonAlwaysFalse()
@@ -2146,28 +2142,7 @@ export class Checker extends ParseTreeWalker {
                 }
             }
         } else {
-            let isComparable = false;
-
-            doForEachSubtype(leftType, (leftSubtype) => {
-                if (isComparable) {
-                    return;
-                }
-
-                leftSubtype = this._evaluator.makeTopLevelTypeVarsConcrete(leftSubtype);
-                doForEachSubtype(rightType, (rightSubtype) => {
-                    if (isComparable) {
-                        return;
-                    }
-
-                    rightSubtype = this._evaluator.makeTopLevelTypeVarsConcrete(rightSubtype);
-
-                    if (this._isTypeComparable(leftSubtype, rightSubtype)) {
-                        isComparable = true;
-                    }
-                });
-            });
-
-            if (!isComparable) {
+            if (!this._evaluator.typesOverlap(leftType, rightType, /* checkEq */ true)) {
                 const leftTypeText = this._evaluator.printType(leftType, { expandTypeAlias: true });
                 const rightTypeText = this._evaluator.printType(rightType, { expandTypeAlias: true });
 
@@ -2181,117 +2156,6 @@ export class Checker extends ParseTreeWalker {
                 );
             }
         }
-    }
-
-    // Determines whether the two types are potentially comparable -- i.e.
-    // their types overlap in such a way that it makes sense for them to
-    // be compared with an == or != operator.
-    private _isTypeComparable(leftType: Type, rightType: Type) {
-        if (isAnyOrUnknown(leftType) || isAnyOrUnknown(rightType)) {
-            return true;
-        }
-
-        if (isNever(leftType) || isNever(rightType)) {
-            return false;
-        }
-
-        if (isModule(leftType) || isModule(rightType)) {
-            return isTypeSame(leftType, rightType);
-        }
-
-        if (isNoneInstance(leftType) || isNoneInstance(rightType)) {
-            return isTypeSame(leftType, rightType);
-        }
-
-        const isLeftCallable = isFunction(leftType) || isOverloadedFunction(leftType);
-        const isRightCallable = isFunction(rightType) || isOverloadedFunction(rightType);
-        if (isLeftCallable !== isRightCallable) {
-            return false;
-        }
-
-        if (isInstantiableClass(leftType) || (isClassInstance(leftType) && ClassType.isBuiltIn(leftType, 'type'))) {
-            if (
-                isInstantiableClass(rightType) ||
-                (isClassInstance(rightType) && ClassType.isBuiltIn(rightType, 'type'))
-            ) {
-                const genericLeftType = ClassType.cloneForSpecialization(
-                    leftType,
-                    /* typeArguments */ undefined,
-                    /* isTypeArgumentExplicit */ false
-                );
-                const genericRightType = ClassType.cloneForSpecialization(
-                    rightType,
-                    /* typeArguments */ undefined,
-                    /* isTypeArgumentExplicit */ false
-                );
-
-                if (
-                    this._evaluator.assignType(genericLeftType, genericRightType) ||
-                    this._evaluator.assignType(genericRightType, genericLeftType)
-                ) {
-                    return true;
-                }
-            }
-
-            // Does the class have an operator overload for eq?
-            const metaclass = leftType.details.effectiveMetaclass;
-            if (metaclass && isClass(metaclass)) {
-                if (lookUpClassMember(metaclass, '__eq__', MemberAccessFlags.SkipObjectBaseClass)) {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        if (isClassInstance(leftType)) {
-            if (isClassInstance(rightType)) {
-                const genericLeftType = ClassType.cloneForSpecialization(
-                    leftType,
-                    /* typeArguments */ undefined,
-                    /* isTypeArgumentExplicit */ false
-                );
-                const genericRightType = ClassType.cloneForSpecialization(
-                    rightType,
-                    /* typeArguments */ undefined,
-                    /* isTypeArgumentExplicit */ false
-                );
-
-                if (
-                    this._evaluator.assignType(genericLeftType, genericRightType) ||
-                    this._evaluator.assignType(genericRightType, genericLeftType)
-                ) {
-                    return true;
-                }
-
-                // Assume that if the types are disjoint and built-in classes that they
-                // will never be comparable.
-                if (ClassType.isBuiltIn(leftType) && ClassType.isBuiltIn(rightType)) {
-                    return false;
-                }
-            }
-
-            // Does the class have an operator overload for eq?
-            const eqMethod = lookUpClassMember(
-                ClassType.cloneAsInstantiable(leftType),
-                '__eq__',
-                MemberAccessFlags.SkipObjectBaseClass
-            );
-
-            if (eqMethod) {
-                // If this is a synthesized method for a dataclass, we can assume
-                // that other dataclass types will not be comparable.
-                if (ClassType.isDataClass(leftType) && eqMethod.symbol.getSynthesizedType()) {
-                    return false;
-                }
-
-                return true;
-            }
-
-            return false;
-        }
-
-        return true;
     }
 
     // If the function is a generator, validates that its annotated return type
@@ -3257,7 +3121,7 @@ export class Checker extends ParseTreeWalker {
         // If there's one or more declaration with a declared type,
         // all other declarations should match. The only exception is
         // for functions that have an overload.
-        const primaryDecl = getLastTypedDeclaredForSymbol(symbol);
+        const primaryDecl = getLastTypedDeclarationForSymbol(symbol);
 
         // If there's no declaration with a declared type, we're done.
         if (!primaryDecl) {
@@ -4828,7 +4692,7 @@ export class Checker extends ParseTreeWalker {
     // Validates that any overridden member variables are not marked
     // as Final in parent classes.
     private _validateFinalMemberOverrides(classType: ClassType) {
-        classType.details.fields.forEach((localSymbol, name) => {
+        ClassType.getSymbolTable(classType).forEach((localSymbol, name) => {
             const parentSymbol = lookUpClassMember(classType, name, MemberAccessFlags.SkipOriginalClass);
             if (parentSymbol && isInstantiableClass(parentSymbol.classType) && !SymbolNameUtils.isPrivateName(name)) {
                 // Did the parent class explicitly declare the variable as final?
@@ -4881,6 +4745,7 @@ export class Checker extends ParseTreeWalker {
             this._evaluator,
             node.name,
             classType,
+            /* diag */ undefined,
             MemberAccessFlags.SkipObjectBaseClass
         );
 
@@ -4895,6 +4760,7 @@ export class Checker extends ParseTreeWalker {
             this._evaluator,
             node.name,
             ClassType.cloneAsInstance(classType),
+            /* diag */ undefined,
             MemberAccessFlags.SkipObjectBaseClass
         );
 
@@ -4905,7 +4771,7 @@ export class Checker extends ParseTreeWalker {
             }
         }
 
-        classType.details.fields.forEach((symbol, name) => {
+        ClassType.getSymbolTable(classType).forEach((symbol, name) => {
             // Enum members don't have type annotations.
             if (symbol.getTypedDeclarations().length > 0) {
                 return;
@@ -5017,7 +4883,7 @@ export class Checker extends ParseTreeWalker {
         const initOnlySymbolMap = new Map<string, Symbol>();
         ClassType.getReverseMro(classType).forEach((mroClass) => {
             if (isClass(mroClass) && ClassType.isDataClass(mroClass)) {
-                mroClass.details.fields.forEach((symbol, name) => {
+                ClassType.getSymbolTable(mroClass).forEach((symbol, name) => {
                     if (symbol.isInitVar()) {
                         initOnlySymbolMap.set(name, symbol);
                     }
@@ -5179,7 +5045,7 @@ export class Checker extends ParseTreeWalker {
             getProtocolSymbolsRecursive(classType, abstractSymbols, ClassTypeFlags.SupportsAbstractMethods);
         }
 
-        classType.details.fields.forEach((localSymbol, name) => {
+        ClassType.getSymbolTable(classType).forEach((localSymbol, name) => {
             abstractSymbols.delete(name);
 
             // This applies only to instance members.
@@ -5398,7 +5264,7 @@ export class Checker extends ParseTreeWalker {
             return;
         }
 
-        classType.details.fields.forEach((symbol, name) => {
+        ClassType.getSymbolTable(classType).forEach((symbol, name) => {
             const decls = symbol.getDeclarations();
             const isDefinedBySlots = decls.some(
                 (decl) => decl.type === DeclarationType.Variable && decl.isDefinedBySlots
@@ -5780,14 +5646,14 @@ export class Checker extends ParseTreeWalker {
         let overrideType = this._evaluator.getEffectiveTypeOfSymbol(overrideSymbol);
         overrideType = partiallySpecializeType(overrideType, overrideClassAndSymbol.classType);
 
-        const childOverrideSymbol = childClassType.details.fields.get(memberName);
+        const childOverrideSymbol = ClassType.getSymbolTable(childClassType).get(memberName);
         const childOverrideType = childOverrideSymbol
             ? this._evaluator.getEffectiveTypeOfSymbol(childOverrideSymbol)
             : undefined;
 
         let diag: Diagnostic | undefined;
-        const overrideDecl = getLastTypedDeclaredForSymbol(overrideClassAndSymbol.symbol);
-        const overriddenDecl = getLastTypedDeclaredForSymbol(overriddenClassAndSymbol.symbol);
+        const overrideDecl = getLastTypedDeclarationForSymbol(overrideClassAndSymbol.symbol);
+        const overriddenDecl = getLastTypedDeclarationForSymbol(overriddenClassAndSymbol.symbol);
 
         if (isFunction(overriddenType) || isOverloadedFunction(overriddenType)) {
             const diagAddendum = new DiagnosticAddendum();
@@ -5849,7 +5715,7 @@ export class Checker extends ParseTreeWalker {
             // This check can be expensive, so don't perform it if the corresponding
             // rule is disabled.
             if (this._fileInfo.diagnosticRuleSet.reportIncompatibleVariableOverride !== 'none') {
-                const primaryDecl = getLastTypedDeclaredForSymbol(overriddenClassAndSymbol.symbol);
+                const primaryDecl = getLastTypedDeclarationForSymbol(overriddenClassAndSymbol.symbol);
                 let isInvariant = primaryDecl?.type === DeclarationType.Variable && !primaryDecl.isFinal;
 
                 // If the entry is a member of a frozen dataclass, it is immutable,
@@ -5964,8 +5830,8 @@ export class Checker extends ParseTreeWalker {
     // are decorated. For example, if the first overload is not marked @final
     // but subsequent ones are, an error should be reported.
     private _validateOverloadDecoratorConsistency(classType: ClassType) {
-        classType.details.fields.forEach((symbol, name) => {
-            const primaryDecl = getLastTypedDeclaredForSymbol(symbol);
+        ClassType.getSymbolTable(classType).forEach((symbol, name) => {
+            const primaryDecl = getLastTypedDeclarationForSymbol(symbol);
 
             if (!primaryDecl || primaryDecl.type !== DeclarationType.Function) {
                 return;
@@ -6143,7 +6009,7 @@ export class Checker extends ParseTreeWalker {
     // types as the original method. Also marks the class as abstract if one
     // or more abstract methods are not overridden.
     private _validateBaseClassOverrides(classType: ClassType) {
-        classType.details.fields.forEach((symbol, name) => {
+        ClassType.getSymbolTable(classType).forEach((symbol, name) => {
             // Private symbols do not need to match in type since their
             // names are mangled, and subclasses can't access the value in
             // the parent class.
@@ -6240,6 +6106,11 @@ export class Checker extends ParseTreeWalker {
         // If the declaration for the override function is not the same as the
         // declaration for the symbol, the function was probably replaced by a decorator.
         if (!symbol.getDeclarations().some((decl) => decl === overrideFunction!.details.declaration)) {
+            return;
+        }
+
+        // If the base class is unknown, don't report a missing decorator.
+        if (isAnyOrUnknown(baseMember.classType)) {
             return;
         }
 
@@ -6352,7 +6223,7 @@ export class Checker extends ParseTreeWalker {
             }
 
             if (reportFinalMethodOverride) {
-                const decl = getLastTypedDeclaredForSymbol(overrideSymbol);
+                const decl = getLastTypedDeclarationForSymbol(overrideSymbol);
                 if (decl && decl.type === DeclarationType.Function) {
                     const diag = this._evaluator.addDiagnostic(
                         DiagnosticRule.reportIncompatibleMethodOverride,
@@ -6363,7 +6234,7 @@ export class Checker extends ParseTreeWalker {
                         decl.node.name
                     );
 
-                    const origDecl = getLastTypedDeclaredForSymbol(baseClassAndSymbol.symbol);
+                    const origDecl = getLastTypedDeclarationForSymbol(baseClassAndSymbol.symbol);
                     if (diag && origDecl) {
                         diag.addRelatedInfo(LocAddendum.finalMethod(), origDecl.uri, origDecl.range);
                     }
@@ -6397,7 +6268,7 @@ export class Checker extends ParseTreeWalker {
                         const decl =
                             isFunction(overrideType) && overrideType.details.declaration
                                 ? overrideType.details.declaration
-                                : getLastTypedDeclaredForSymbol(overrideSymbol);
+                                : getLastTypedDeclarationForSymbol(overrideSymbol);
                         if (decl) {
                             const diag = this._evaluator.addDiagnostic(
                                 DiagnosticRule.reportIncompatibleMethodOverride,
@@ -6408,7 +6279,7 @@ export class Checker extends ParseTreeWalker {
                                 getNameNodeForDeclaration(decl) ?? decl.node
                             );
 
-                            const origDecl = getLastTypedDeclaredForSymbol(baseClassAndSymbol.symbol);
+                            const origDecl = getLastTypedDeclarationForSymbol(baseClassAndSymbol.symbol);
                             if (diag && origDecl) {
                                 diag.addRelatedInfo(LocAddendum.overriddenMethod(), origDecl.uri, origDecl.range);
                             }
@@ -6433,7 +6304,7 @@ export class Checker extends ParseTreeWalker {
                             getNameNodeForDeclaration(lastDecl) ?? lastDecl.node
                         );
 
-                        const origDecl = getLastTypedDeclaredForSymbol(baseClassAndSymbol.symbol);
+                        const origDecl = getLastTypedDeclarationForSymbol(baseClassAndSymbol.symbol);
                         if (diag && origDecl) {
                             diag.addRelatedInfo(LocAddendum.overriddenMethod(), origDecl.uri, origDecl.range);
                         }
@@ -6631,7 +6502,7 @@ export class Checker extends ParseTreeWalker {
                             getNameNodeForDeclaration(lastDecl) ?? lastDecl.node
                         );
 
-                        const origDecl = getLastTypedDeclaredForSymbol(baseClassAndSymbol.symbol);
+                        const origDecl = getLastTypedDeclarationForSymbol(baseClassAndSymbol.symbol);
                         if (diag && origDecl) {
                             diag.addRelatedInfo(LocAddendum.overriddenSymbol(), origDecl.uri, origDecl.range);
                         }
@@ -6729,7 +6600,7 @@ export class Checker extends ParseTreeWalker {
                             getNameNodeForDeclaration(lastDecl) ?? lastDecl.node
                         );
 
-                        const origDecl = getLastTypedDeclaredForSymbol(baseClassAndSymbol.symbol);
+                        const origDecl = getLastTypedDeclarationForSymbol(baseClassAndSymbol.symbol);
                         if (diag && origDecl) {
                             diag.addRelatedInfo(LocAddendum.overriddenSymbol(), origDecl.uri, origDecl.range);
                         }
@@ -6950,6 +6821,23 @@ export class Checker extends ParseTreeWalker {
         const paramInfo = functionType.details.parameters[0];
         if (!paramInfo.typeAnnotation || !paramInfo.name) {
             return;
+        }
+
+        // If this is an __init__ method, we need to specifically check for the
+        // use of class-scoped TypeVars, which are not allowed in this context
+        // according to the typing spec.
+        if (functionType.details.name === '__init__' && functionType.details.methodClass) {
+            const typeVars = getTypeVarArgumentsRecursive(paramInfo.type);
+
+            if (
+                typeVars.some((typeVar) => typeVar.scopeId === functionType.details.methodClass?.details.typeVarScopeId)
+            ) {
+                this._evaluator.addDiagnostic(
+                    DiagnosticRule.reportGeneralTypeIssues,
+                    LocMessage.initMethodSelfParamTypeVar(),
+                    paramInfo.typeAnnotation
+                );
+            }
         }
 
         // If this is a protocol class, the self and cls parameters can be bound

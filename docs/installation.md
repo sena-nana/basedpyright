@@ -21,9 +21,8 @@ Vim/Neovim users can install [coc-pyright](https://github.com/fannheyward/coc-py
 Alternatively, [ALE](https://github.com/dense-analysis/ale) will automatically check your code with Pyright if added to the linters list.
 
 #### Sublime Text
-*⚠ basedpyright has not been tested on this editor. if you run into issues with these instructions, please raise an issue.*
 
-Sublime text users can install the [LSP-pyright](https://github.com/sublimelsp/LSP-pyright) plugin from [package control](https://packagecontrol.io/packages/LSP-pyright).
+Sublime text users can install both [LSP](https://packagecontrol.io/packages/LSP) and [LSP-basedpyright](https://packagecontrol.io/packages/LSP-basedpyright) via [Package Control](https://packagecontrol.io).
 
 #### Emacs
 *⚠ basedpyright has not been tested on this editor. if you run into issues with these instructions, please raise an issue.*
@@ -32,4 +31,34 @@ Emacs users can install [eglot](https://github.com/joaotavora/eglot) or [lsp-mod
 
 ### Command-line
 
-unlike pyright, basedpyright is available as a [pypi package](https://pypi.org/project/basedpyright/) instead of an npm package. for more information, [see here](https://detachhead.github.io/basedpyright/#/?id=published-as-a-pypi-package-no-nodejs-required)
+unlike pyright, basedpyright is available as a [pypi package](https://pypi.org/project/basedpyright/) instead of an npm package.
+
+this makes it far more convenient for python developers to use, since there's no need to install any additional tools. just install it normally via your package manager of choice:
+
+<!-- tabs:start -->
+
+#### **pdm**
+
+```
+pdm add basedpyright
+```
+
+#### **rye**
+
+```
+rye add basedpyright
+```
+
+#### **uv**
+
+```
+uv pip install basedpyright
+```
+
+#### **pip**
+
+```
+pip install basedpyright
+```
+
+<!-- tabs:end -->

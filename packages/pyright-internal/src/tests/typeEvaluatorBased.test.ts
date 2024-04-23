@@ -1,6 +1,8 @@
 import { BasedConfigOptions, ConfigOptions } from '../common/configOptions';
 import { DiagnosticRule } from '../common/diagnosticRules';
+import { pythonVersion3_8 } from '../common/pythonVersion';
 import { Uri } from '../common/uri/uri';
+import { UriEx } from '../common/uri/uriUtils';
 import { resolveSampleFilePath, typeAnalyzeSampleFiles, validateResultsButBased } from './testUtils';
 
 test('reportUnreachable', () => {
@@ -45,7 +47,7 @@ test('reportPrivateLocalImportUsage', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.diagnosticRuleSet.reportPrivateLocalImportUsage = 'error';
     //TODO: typeAnalyzeSampleFiles should probably do this by default
-    configOptions.projectRoot = Uri.file(resolveSampleFilePath('based_implicit_re_export'));
+    configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_implicit_re_export'));
     const analysisResults = typeAnalyzeSampleFiles(['based_implicit_re_export/baz.py'], configOptions);
     validateResultsButBased(analysisResults, {
         errors: [
@@ -59,6 +61,32 @@ test('reportPrivateLocalImportUsage', () => {
                 code: DiagnosticRule.reportPrivateLocalImportUsage,
                 message: '"b" is not exported from module "asdf.bar"\n  Import from "asdf.foo" instead',
             },
+        ],
+    });
+});
+
+test('reportInvalidCast', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.diagnosticRuleSet.reportInvalidCast = 'error';
+    const analysisResults = typeAnalyzeSampleFiles(['cast.py'], configOptions);
+    validateResultsButBased(analysisResults, {
+        errors: [
+            { code: DiagnosticRule.reportInvalidCast, line: 4 },
+            { code: DiagnosticRule.reportInvalidCast, line: 5 },
+        ],
+    });
+});
+
+test('subscript context manager types on 3.8', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_8;
+    const analysisResults = typeAnalyzeSampleFiles(['subscript_check.py'], configOptions);
+    const message =
+        'Subscript for class "AbstractContextManager" will generate runtime exception; enclose type annotation in quotes';
+    validateResultsButBased(analysisResults, {
+        errors: [
+            { code: DiagnosticRule.reportGeneralTypeIssues, line: 7, message },
+            { code: DiagnosticRule.reportGeneralTypeIssues, line: 9, message },
         ],
     });
 });

@@ -15,10 +15,13 @@
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.formatOnSave": true
     },
+    "[toml]": {
+        "editor.defaultFormatter": "tamasfe.even-better-toml",
+        "editor.formatOnSave": true
+    },
     "editor.defaultFormatter": "esbenp.prettier-vscode",
     "typescript.enablePromptUseWorkspaceTsdk": true,
     "typescript.tsdk": "node_modules/typescript/lib",
-    "python.languageServer": "None",
     "editor.formatOnSave": true,
     "git.allowForcePush": true,
     "git.autofetch": "all",

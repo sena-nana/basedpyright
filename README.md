@@ -1,6 +1,10 @@
 <h1><img src="https://github.com/DetachHead/basedpyright/assets/57028336/c7342c31-bf23-413c-af6d-bc430898b3dd"> basedpyright</h1>
 
+[![Stable Version](https://img.shields.io/pypi/v/basedpyright?logo=pypi)](https://pypi.org/project/basedpyright/) [![visual studio marketplace](https://img.shields.io/visual-studio-marketplace/d/detachhead.basedpyright?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=detachhead.basedpyright) [![open VSX](https://img.shields.io/open-vsx/dt/detachhead/basedpyright?logo=vscodium)](https://open-vsx.org/extension/detachhead/basedpyright) [![nvim-lspconfig](https://img.shields.io/badge/nvim--lspconfig-grey?logo=neovim)](https://github.com/neovim/nvim-lspconfig/blob/master/doc/server_configurations.md#basedpyright) [![sublime text](https://img.shields.io/packagecontrol/dt/LSP-basedpyright?logo=sublimetext)](https://packagecontrol.io/packages/LSP-basedpyright) [![Discord](https://img.shields.io/discord/948915247073349673?logo=discord)](https://discord.gg/7y9upqPrk2) [![basedpyright - checked](https://img.shields.io/badge/basedpyright-checked-42b983)](https://detachhead.github.io/basedpyright)
+
 Basedpyright is a fork of [pyright](https://github.com/microsoft/pyright) with various type checking improvements, improved vscode support and pylance features built into the language server.
+
+📚 [Documentation](https://detachhead.github.io/basedpyright) | 🛝 [Playground](http://basedpyright.com)
 
 ## why?
 
@@ -25,7 +29,7 @@ python developers should not be expected to have to install nodejs in order to t
 pyright often incorrectly marks code as unreachable. in most cases, unreachable code is a mistake and therefore should be an error, but pyright does not have an option to report unreachable code. in fact, unreachable code is not even type-checked at all:
 
 ```py
-if sys.platform == "win32": 
+if sys.platform == "win32":
   1 + "" # no error
 ```
 
@@ -80,6 +84,61 @@ from foo import a
 from foo import b
 ```
 
+#### `reportImplicitRelativeImport` - reporting errors on invalid "relative" imports
+
+pyright allows invalid imports such as this:
+```py
+# ./module_name/foo.py:
+```
+```py
+# ./module_name/bar.py:
+import foo # wrong! should be `import module_name.foo` or `from module_name import foo`
+```
+
+this may look correct at first glance, and will work when running `bar.py` directly as a script, but when it's imported as a module, it will crash:
+```py
+# ./main.py:
+import module_name.bar  # ModuleNotFoundError: No module named 'foo'
+```
+
+the new `reportImplicitRelativeImport` rule bans imports like this. if you want to do a relative import, the correct way to do it is by importing it from `.` (the current package):
+```py
+# ./module_name/bar.py:
+from . import foo
+```
+
+#### `reportInvalidCast` - prevent non-overlapping `cast`s
+
+most of the time when casting, you want to either cast to a narrower or wider type:
+
+```py
+foo: int | None
+cast(int, foo) #  narrower type
+cast(object, foo) #  wider type
+```
+
+but pyright doesn't prevent casts to a type that doesn't overlap with the original:
+
+```py
+foo: int
+cast(str, foo)
+```
+
+in this example, it's impossible to be `foo` to be a `str` if it's also an `int`, because the `int` and `str` types do not overlap. the `reportInvalidCast` rule will report invalid casts like these.
+
+##### note about casting with `TypedDict`s
+
+a common use case of `cast` is to convert a regular `dict` into a `TypedDict`:
+
+```py
+foo: dict[str, int | str]
+bar = cast(dict[{"foo": int, "bar": str}], foo)
+```
+
+unfortunately, this will cause a `reportInvalidCast` error when this rule is enabled, because although at runtime `TypedDict` is a `dict`, type checkers treat it as an unrelated subtype of `Mapping` that doesn't have a `clear` method, which would break its type-safety if it were to be called on a `TypedDict`.
+
+this means that although casting between them is a common use case, `TypedDict`s and `dict`s technically do not overlap.
+
 ### re-implementing pylance-exclusive features
 
 basedpyright re-implements some of the features that microsoft made exclusive to pylance, which is microsoft's closed-source vscode extension built on top of the pyright language server with some additional exclusive functionality ([see the pylance FAQ for more information](https://github.com/microsoft/pylance-release/blob/main/FAQ.md#what-features-are-in-pylance-but-not-in-pyright-what-is-the-difference-exactly)).
@@ -126,29 +185,6 @@ in this example, it's very easy for errors to go undetected because you thought 
 
 to solve this problem, basedpyright will exit with code 3 on any invalid config.
 
-### reporting errors on invalid "relative" imports
-
-pyright allows invalid imports such as this:
-```py
-# ./module_name/foo.py:
-```
-```py
-# ./module_name/bar.py:
-import foo # wrong! should be `import module_name.foo` or `from module_name import foo`
-```
-
-this may look correct at first glance, and will work when running `bar.py` directly as a script, but when it's imported as a module, it will crash:
-```py
-# ./main.py:
-import module_name.bar  # ModuleNotFoundError: No module named 'foo' 
-```
-
-basedpyright bans imports like this. if you want to do a relative import, the correct way to do it is by prefixing the module name with a `.`:
-```py
-# ./module_name/bar.py:
-import .foo
-```
-
 ### fixes for the `reportRedeclaration` and `reportDuplicateImport` rules
 
 pyright does not report redeclarations if the redeclaration has the same type:
@@ -174,43 +210,57 @@ used to be `basic`, but now defaults to `all`. in the future we intend to add [b
 #### `pythonPlatform`
 used to assume that the operating system pyright is being run on is the only operating system your code will run on, which is rarely the case. in basedpyright, `pythonPlatform` defaults to `All`, which assumes your code can run on any operating system.
 
+### improved integration with CI platforms
+
+regular pyright has third party integrations for github actions and gitlab, but they are difficult to install/set up. these integrations are built into basedpyright, which makes them much easier to use.
+
+### github actions
+
+basedpyright automatically detects when it's running in a github action, and modifies its output to use [github workflow commands](https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions). this means errors will be displayed on the affected lines of code in your pull requests automatically:
+
+![image](https://github.com/DetachHead/basedpyright/assets/57028336/cc820085-73c2-41f8-ab0b-0333b97e2fea)
+
+this is an improvement to regular pyright, which requires you to use a [third party action](https://github.com/jakebailey/pyright-action) that [requires boilerplate to get working](https://github.com/jakebailey/pyright-action?tab=readme-ov-file#use-with-a-virtualenv). basedpyright just does it automatically without you having to do anything special:
+
+```yaml
+# .github/workflows/your_workflow.yaml
+
+jobs:
+  check:
+    steps:
+      - run: ...  # checkout repo, install dependencies, etc
+      - run: basedpyright  # no additional arguments required. it automatically detects if it's running in a github action 
+```
+
+### gitlab code quality reports
+
+the `--gitlabcodequality` argument will output a [gitlab code quality report](https://docs.gitlab.com/ee/ci/testing/code_quality.html) which shows up on merge requests:
+
+![image](https://github.com/DetachHead/basedpyright/assets/57028336/407f0e61-15f2-4d04-b235-1946d49fd180)
+
+to enable this in your gitlab CI, just specify a file path to output the report to, and in the `artifacts.reports.codequality` section of your `.gitlab-ci.yml` file:
+
+```yaml
+basedpyright:
+  script: basedpyright --gitlabcodequality report.json
+  artifacts:
+    reports:
+      codequality: report.json
+```
+
 ## basedmypy feature parity
 
 [basedmypy](https://github.com/kotlinisland/basedmypy) is a fork of mypy with a similar goal in mind: to fix some of the serious problems in mypy that do not seem to be a priority for the maintainers. it also adds many new features which may not be standardized but greatly improve the developer experience when working with python's far-from-perfect type system.
 
 we aim to [port most of basedmypy's features to basedpyright](https://github.com/DetachHead/basedpyright/issues?q=is%3Aissue+is%3Aopen+label%3A%22basedmypy+feature+parity%22), however as mentioned above our priority is to first fix the critical problems with pyright.
 
+note that any non-standard features we add will be optional, as we intend to support library developmers who can't control what type checker their library is used with.
+
 # pypi package
 
-[![](https://img.shields.io/pypi/v/basedpyright?color=blue)](https://pypi.org/project/basedpyright/)
+basedpyright differs from pyright by publishing the command line tool as a [pypi package](https://pypi.org/project/basedpyright/) instead of an npm package. this makes it far more convenient for python developers to use, since there's no need to install any additional tools.
 
-basedpyright differs from pyright by publishing the command line tool as a pypi package instead of an npm package. this makes it far more convenient for python developers to use.
-
-```shell
-> basedpyright --help
-Usage: basedpyright [options] files...
-  Options:
-  --createstub <IMPORT>              Create type stub file(s) for import
-  --dependencies                     Emit import dependency information
-  -h,--help                          Show this help message
-  --ignoreexternal                   Ignore external imports for --verifytypes
-  --level <LEVEL>                    Minimum diagnostic level (error or warning)
-  --outputjson                       Output results in JSON format
-  -p,--project <FILE OR DIRECTORY>   Use the configuration file at this location
-  --pythonplatform <PLATFORM>        Analyze for a specific platform (Darwin, Linux, Windows)
-  --pythonpath <FILE>                Path to the Python interpreter
-  --pythonversion <VERSION>          Analyze for a specific version (3.3, 3.4, etc.)
-  --skipunannotated                  Skip analysis of functions with no type annotations
-  --stats                            Print detailed performance stats
-  -t,--typeshedpath <DIRECTORY>      Use typeshed type stubs at this location
-  -v,--venvpath <DIRECTORY>          Directory that contains virtual environments
-  --verbose                          Emit verbose diagnostics
-  --verifytypes <PACKAGE>            Verify type completeness of a py.typed package
-  --version                          Print Pyright version and exit
-  --warnings                         Use exit code of 1 if warnings are reported
-  -w,--watch                         Continue to run and watch for changes
-  -                                  Read files from stdin
-```
+for more information, see the [installation instructions](https://detachhead.github.io/basedpyright/#/installation?id=command-line).
 
 # vscode extension
 
@@ -220,8 +270,23 @@ install the extension from [the vscode extension marketplace](https://marketplac
 
 ## usage
 
-the basedpyright vscode extension will automatically look for the pypi package in your python environment. see the recommended setup section below for more information
+the basedpyright vscode extension will automatically look for the pypi package in your python environment.
 
+if you're adding basedpyright as a development dependency in your project, we recommend addibg it to the recommended extensions list in your workspace to prompt others working on your repo to install it:
+
+```jsonc
+// .vscode/extensions.json
+
+{
+  "recommendations": ["detachhead.basedpyright"]
+}
+```
+
+in `.vscode/settings.json`, remove any settings starting with `python.analysis`, as they are not used by basedpyright. you should instead set these settings using the `tool.basedpyright` (or `tool.pyright`) section in `pyroject.toml` ([see below](#pyprojecttoml))
+
+you should also disable the built in language server support from the python extension, as it conflicts with basedpyright's language server. the basedpyright extension will detect this problem and suggest fixing it automatically.
+
+<!-- if changing this section title, make sure you also change the url in the pylance notification in the vscode extension -->
 ## using basedpyright with pylance (not recommended)
 
 unless you depend on any pylance-exclusive features that haven't yet been re-implemented in basedpyright, it's recommended to disable/uninstall the pylance extension.
@@ -237,49 +302,40 @@ if you do want to continue using pylance, all of the options and commands in bas
     "basedpyright.disableLanguageServices": true
 }
 ```
+*(the basedpyright extension will detect this problem and suggest fixing it automatically)*
 
 # playground
 
 you can try basedpyright in your browser using the [basedpyright playground](http://basedpyright.com)
+
+# pre-commit hook
+
+integration with [pre-commit](https://pre-commit.com) is also supported.
+
+```yaml
+# .pre-commit-config.yaml
+
+repos:
+  - repo: https://github.com/DetachHead/basedpyright
+    rev: v1.8.0
+    hooks:
+    - id: basedpyright
+```
+
+to ensure that basedpyright is able to find all of the dependencies in your
+virtual env, add the following to your `pyproject.toml`:
+
+```toml
+[tool.basedpyright]
+# ...
+venvPath = "."
+```
 
 # recommended setup
 
 it's recommended to use both the basedpyright cli and vscode extension in your project. the vscode extension is for local development and the cli is for your CI.
 
 below are the changes i recommend making to your project when adopting basedpyright
-
-## `.vscode/extensions.json`
-
-```jsonc
-{
-  "recommendations": [
-    "detachhead.basedpyright" // this will prompt developers working on your project to install the extension
-  ],
-  "unwantedRecommendations": [
-    "ms-python.vscode-pylance"
-  ]
-}
-```
-
-## `.vscode/settings.json`
-
-- remove any settings starting with `python.analysis`, as they are not used by basedpyright. you should instead set these settings using the `tool.basedpyright` (or `tool.pyright`) section in `pyroject.toml` ([see below](#pyprojecttoml))
-- disable the built in language server support from the python extension, as it seems to conflict with basedpyright's language server:
-  ```json
-  {
-      "python.languageServer": "None"
-  }
-  ```
-
-## `.github/workflows/check.yaml`
-
-```yaml
-jobs:
-  check:
-    steps:
-      - run: ...  # checkout repo, install dependencies, etc
-      - run: basedpyright  # add this line
-```
 
 ## `pyproject.toml`
 

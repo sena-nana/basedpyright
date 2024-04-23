@@ -20,7 +20,7 @@ import { FileSystem } from './fileSystem';
 import { Host } from './host';
 import { PythonVersion, latestStablePythonVersion } from './pythonVersion';
 import { ServiceProvider } from './serviceProvider';
-import { ServiceKeys } from './serviceProviderExtensions';
+import { ServiceKeys } from './serviceKeys';
 import { Uri } from './uri/uri';
 import { FileSpec, getFileSpec, isDirectory } from './uri/uriUtils';
 import { userFacingOptionsList } from './stringUtils';
@@ -381,18 +381,12 @@ export interface DiagnosticRuleSet {
     reportImplicitOverride: DiagnosticLevel;
 
     // basedpyright options:
-
-    // Report unreachable code
     reportUnreachable: DiagnosticLevel;
-
-    // Report usages of Any-typed values
     reportAny: DiagnosticLevel;
-
-    // Report ignore comments without a specified rule
     reportIgnoreCommentWithoutRule: DiagnosticLevel;
-
-    // the "works properly" version of reportPrivateImportUsage
     reportPrivateLocalImportUsage: DiagnosticLevel;
+    reportImplicitRelativeImport: DiagnosticLevel;
+    reportInvalidCast: DiagnosticLevel;
 }
 
 export function cloneDiagnosticRuleSet(diagSettings: DiagnosticRuleSet): DiagnosticRuleSet {
@@ -512,6 +506,9 @@ export function getDiagLevelDiagnosticRules() {
         DiagnosticRule.reportUnreachable,
         DiagnosticRule.reportAny,
         DiagnosticRule.reportIgnoreCommentWithoutRule,
+        DiagnosticRule.reportInvalidCast,
+        DiagnosticRule.reportImplicitRelativeImport,
+        DiagnosticRule.reportPrivateLocalImportUsage,
     ];
 }
 
@@ -622,6 +619,8 @@ export function getOffDiagnosticRuleSet(): DiagnosticRuleSet {
         reportAny: 'none',
         reportIgnoreCommentWithoutRule: 'none',
         reportPrivateLocalImportUsage: 'none',
+        reportImplicitRelativeImport: 'none',
+        reportInvalidCast: 'none',
     };
 
     return diagSettings;
@@ -728,6 +727,8 @@ export function getBasicDiagnosticRuleSet(): DiagnosticRuleSet {
         reportAny: 'none',
         reportIgnoreCommentWithoutRule: 'none',
         reportPrivateLocalImportUsage: 'none',
+        reportImplicitRelativeImport: 'none',
+        reportInvalidCast: 'none',
     };
 
     return diagSettings;
@@ -834,6 +835,8 @@ export function getStandardDiagnosticRuleSet(): DiagnosticRuleSet {
         reportAny: 'none',
         reportIgnoreCommentWithoutRule: 'none',
         reportPrivateLocalImportUsage: 'none',
+        reportImplicitRelativeImport: 'none',
+        reportInvalidCast: 'none',
     };
 
     return diagSettings;
@@ -939,6 +942,8 @@ export const getAllDiagnosticRuleSet = (): DiagnosticRuleSet => ({
     reportAny: 'error',
     reportIgnoreCommentWithoutRule: 'error',
     reportPrivateLocalImportUsage: 'error',
+    reportImplicitRelativeImport: 'error',
+    reportInvalidCast: 'error',
 });
 
 export function getStrictDiagnosticRuleSet(): DiagnosticRuleSet {
@@ -1042,6 +1047,8 @@ export function getStrictDiagnosticRuleSet(): DiagnosticRuleSet {
         reportAny: 'none',
         reportIgnoreCommentWithoutRule: 'none',
         reportPrivateLocalImportUsage: 'none',
+        reportImplicitRelativeImport: 'none',
+        reportInvalidCast: 'none',
     };
 
     return diagSettings;
@@ -1234,7 +1241,7 @@ export class ConfigOptions {
     findExecEnvironment(file: Uri): ExecutionEnvironment {
         return (
             this.executionEnvironments.find((env) => {
-                const envRoot = Uri.isUri(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
+                const envRoot = Uri.is(env.root) ? env.root : this.projectRoot.resolvePaths(env.root || '');
                 return file.startsWith(envRoot);
             }) ?? this.getDefaultExecEnvironment()
         );

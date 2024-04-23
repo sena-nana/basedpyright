@@ -205,6 +205,10 @@ export interface TypeResult<T extends Type = Type> {
     // corresponding __getattr__?
     isAsymmetricAccessor?: boolean;
 
+    // For member access operations that are 'set', this is the narrowed
+    // type when considering the declared type of the member.
+    narrowedTypeForSet?: Type | undefined;
+
     // Is the type wrapped in a "Required", "NotRequired" or "ReadOnly" class?
     isRequired?: boolean;
     isNotRequired?: boolean;
@@ -412,6 +416,10 @@ export interface ClassMemberLookup {
     // to __get__ and __set__ types?
     isAsymmetricAccessor: boolean;
 
+    // For member access operations that are 'set', this is the narrowed
+    // type when considering the declared type of the member.
+    narrowedTypeForSet?: Type;
+
     // Deprecation messages related to magic methods invoked via the member access.
     memberAccessDeprecationInfo?: MemberAccessDeprecationInfo;
 }
@@ -602,7 +610,7 @@ export interface TypeEvaluator {
         baseType: ClassType | undefined,
         memberType: FunctionType | OverloadedFunctionType,
         memberClass?: ClassType,
-        treatConstructorAsClassMember?: boolean,
+        treatConstructorAsClassMethod?: boolean,
         selfType?: ClassType | TypeVarType,
         diag?: DiagnosticAddendum,
         recursionCount?: number
@@ -705,4 +713,5 @@ export interface TypeEvaluator {
         logger: ConsoleInterface
     ) => void;
     printTypeVarContext: (typeVarContext: TypeVarContext) => void;
+    typesOverlap: (leftType: Type, rightType: Type, checkEq: boolean) => boolean;
 }

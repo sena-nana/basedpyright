@@ -20,13 +20,13 @@ import { Commands } from '../commands/commands';
 import { appendArray } from '../common/collectionUtils';
 import { DiagnosticLevel } from '../common/configOptions';
 import { assert, assertNever, fail } from '../common/debug';
-import { CreateTypeStubFileAction, Diagnostic } from '../common/diagnostic';
+import { CreateTypeStubFileAction, Diagnostic, DiagnosticAddendum } from '../common/diagnostic';
 import { DiagnosticRule } from '../common/diagnosticRules';
 import { stripFileExtension } from '../common/pathUtils';
 import { convertTextRangeToRange } from '../common/positionUtils';
 import { TextRange, getEmptyRange } from '../common/textRange';
 import { Uri } from '../common/uri/uri';
-import { LocMessage } from '../localization/localize';
+import { LocAddendum, LocMessage } from '../localization/localize';
 import {
     ArgumentCategory,
     AssertNode,
@@ -388,6 +388,28 @@ export class Binder extends ParseTreeWalker {
                 node
             );
             return true;
+        } else if (importResult.isImplicitlyRelative) {
+            const diagAddendum = new DiagnosticAddendum();
+            diagAddendum.addMessage(
+                LocAddendum.explicitRelativeImportSuggestion().format({ importName: importResult.importName })
+            );
+            // TODO: is there a better way to get the package name here? i think this would always match but idk for sure
+            const currentModuleRegex = /\.[^.]*$/;
+            if (this._fileInfo.moduleName.match(currentModuleRegex)) {
+                const fullModuleName = `${this._fileInfo.moduleName.replace(currentModuleRegex, '')}.${
+                    importResult.importName
+                }`;
+                diagAddendum.addMessage(LocAddendum.fullPathImportSuggestion().format({ importName: fullModuleName }));
+            }
+
+            this._addDiagnostic(
+                this._fileInfo.diagnosticRuleSet.reportImplicitRelativeImport,
+                DiagnosticRule.reportImplicitRelativeImport,
+                LocMessage.implicitRelativeImport().format({
+                    importName: importResult.importName,
+                }) + diagAddendum.getString(),
+                node
+            );
         }
 
         // A source file was found, but the type stub was missing.
@@ -3126,7 +3148,30 @@ export class Binder extends ParseTreeWalker {
 
                     // Look for "X is Y" or "X is not Y".
                     // Look for X == <literal> or X != <literal>
+                    // Look for len(X) == <literal> or len(X) != <literal>
                     return isLeftNarrowing;
+                }
+
+                // Look for len(X) < <literal>, len(X) <= <literal>, len(X) > <literal>, len(X) >= <literal>.
+                if (
+                    expression.rightExpression.nodeType === ParseNodeType.Number &&
+                    expression.rightExpression.isInteger
+                ) {
+                    if (
+                        expression.operator === OperatorType.LessThan ||
+                        expression.operator === OperatorType.LessThanOrEqual ||
+                        expression.operator === OperatorType.GreaterThan ||
+                        expression.operator === OperatorType.GreaterThanOrEqual
+                    ) {
+                        const isLeftNarrowing = this._isNarrowingExpression(
+                            expression.leftExpression,
+                            expressionList,
+                            filterForNeverNarrowing,
+                            /* isComplexExpression */ true
+                        );
+
+                        return isLeftNarrowing;
+                    }
                 }
 
                 // Look for "<string> in Y" or "<string> not in Y".
@@ -3146,12 +3191,21 @@ export class Binder extends ParseTreeWalker {
 
                 // Look for "X in Y" or "X not in Y".
                 if (expression.operator === OperatorType.In || expression.operator === OperatorType.NotIn) {
-                    return this._isNarrowingExpression(
+                    const isLeftNarrowable = this._isNarrowingExpression(
                         expression.leftExpression,
                         expressionList,
                         filterForNeverNarrowing,
                         /* isComplexExpression */ true
                     );
+
+                    const isRightNarrowable = this._isNarrowingExpression(
+                        expression.rightExpression,
+                        expressionList,
+                        filterForNeverNarrowing,
+                        /* isComplexExpression */ true
+                    );
+
+                    return isLeftNarrowable || isRightNarrowable;
                 }
 
                 return false;
@@ -3378,6 +3432,7 @@ export class Binder extends ParseTreeWalker {
                 id: this._getUniqueFlowNodeId(),
                 node,
                 antecedent: this._currentFlowNode!,
+                subjectExpression: node.subjectExpression,
             };
 
             this._currentFlowNode = flowNode;
@@ -3719,7 +3774,7 @@ export class Binder extends ParseTreeWalker {
                     }
 
                     // Is this annotation indicating that the variable is a "ClassVar"?
-                    let classVarInfo = this._isAnnotationClassVar(typeAnnotation);
+                    const classVarInfo = this._isAnnotationClassVar(typeAnnotation);
 
                     if (classVarInfo.isClassVar) {
                         if (!classVarInfo.classVarTypeNode) {
@@ -3728,7 +3783,10 @@ export class Binder extends ParseTreeWalker {
                     }
 
                     // PEP 591 indicates that a Final variable initialized within a class
-                    // body should also be considered a ClassVar.
+                    // body should also be considered a ClassVar unless it's in a dataclass.
+                    // We can't tell at this stage whether it's a dataclass, so we'll simply
+                    // record whether it's a Final assigned in a class body.
+                    let isFinalAssignedInClassBody = false;
                     if (finalInfo.isFinal) {
                         const containingClass = ParseTreeUtils.getEnclosingClassOrFunction(target);
                         if (containingClass && containingClass.nodeType === ParseNodeType.Class) {
@@ -3737,10 +3795,7 @@ export class Binder extends ParseTreeWalker {
                                 target.parent?.nodeType === ParseNodeType.Assignment ||
                                 target.parent?.parent?.nodeType === ParseNodeType.Assignment
                             ) {
-                                classVarInfo = {
-                                    isClassVar: true,
-                                    classVarTypeNode: undefined,
-                                };
+                                isFinalAssignedInClassBody = true;
                             }
                         }
                     }
@@ -3760,9 +3815,13 @@ export class Binder extends ParseTreeWalker {
                     };
                     symbolWithScope.symbol.addDeclaration(declaration);
 
+                    if (isFinalAssignedInClassBody) {
+                        symbolWithScope.symbol.setIsFinalVarInClassBody();
+                    }
+
                     if (classVarInfo.isClassVar) {
                         symbolWithScope.symbol.setIsClassVar();
-                    } else {
+                    } else if (!isFinalAssignedInClassBody) {
                         symbolWithScope.symbol.setIsInstanceMember();
                     }
 

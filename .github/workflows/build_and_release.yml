@@ -1,7 +1,7 @@
 name: 'build and release'
 
 env:
-  NODE_VERSION: '18' # Shipped with VS Code.
+  PYTHON_VERSION: '3.12'
   ARTIFACT_NAME_VSIX: vsix
   VSIX_NAME: vscode-pyright.vsix
   VSIX_DIR: packages/vscode-pyright
@@ -23,37 +23,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v3
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - run: ./pw pdm use ${{ env.PYTHON_VERSION }}
 
-      - name: Get npm cache directory
-        id: npm-cache
-        shell: bash
+      - run: ./pw pdm install
+
+      # using relative path for npm scripts because it needs to work in the package directories too
+      - name: add pyprojectx and npm scripts to PATH
+
         run: |
-          echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - uses: actions/cache@v3
-        with:
-          path: ${{ steps.npm-cache.outputs.dir }}
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - run: npm run install:all
+          realpath ./.pyprojectx/main >> $GITHUB_PATH
+          echo ./node_modules/.bin >> $GITHUB_PATH
 
       - id: current-version
-        run: echo ::set-output name=CURRENT_VERSION::$(node -p "require(\"./lerna.json\").version")
+        run: |
+          echo ::set-output name=CURRENT_VERSION::$(pdm show --version)
+          echo ::set-output name=CURRENT_UPSTREAM_VERSION::$(pdm run node -p "require(\"./lerna.json\").version")
 
-      - if: github.ref == 'refs/heads/main'
-        run: echo ::set-output name=VERSION_INFO::$(npm view $(node -p "require(\"./package.json\").name")@=${{ steps.current-version.outputs.CURRENT_VERSION }})
+      - name: get currently published npm package version
+        if: github.ref == 'refs/heads/main'
+        run: echo ::set-output name=VERSION_INFO::$(pdm run npm view $(node -p "require(\"./package.json\").name")@=${{ steps.current-version.outputs.CURRENT_VERSION }})
         id: version-was-changed
         working-directory: ${{ env.NPM_PACKAGE_DIR }}
+
+      - name: set version for npm packages
+        if: github.ref == 'refs/heads/main'
+        run: lerna version ${{ steps.current-version.outputs.CURRENT_VERSION }} --yes --no-git-tag-version
 
       - name: Build VSIX
         working-directory: ${{ env.VSIX_DIR }}
         run: |
-          npm run package
+          pdm run npm run package
           mv basedpyright-*.vsix ${{ env.VSIX_NAME }}
 
       - uses: actions/upload-artifact@v3
@@ -64,7 +63,7 @@ jobs:
       # publish npm canary version on every push to every branch except main
       - name: set version for npm canary
         if: github.ref != 'refs/heads/main'
-        run: npm version ${{ steps.current-version.outputs.CURRENT_VERSION }}-$GITHUB_SHA --git-tag-version false
+        run: pdm run npm version ${{ steps.current-version.outputs.CURRENT_VERSION }}-$GITHUB_SHA --git-tag-version false
         working-directory: ${{ env.NPM_PACKAGE_DIR }}
       - name: publish package - npm canary
         if: github.ref != 'refs/heads/main'
@@ -84,24 +83,32 @@ jobs:
           access: public
           package: ${{ env.NPM_PACKAGE_DIR }}/package.json
 
+      # this isn't ideal, but it's required becayse pdm publish re-builds the npm packages even tho they were already built earlier.
+      # i think to fix that i need to rewrite pdm_build.py to use the build hooks so we can control it more easily, but i can't get that to work soooo
+      - name: set npm package versions back to upstream so pypi package can use it in --version output
+        if: github.ref == 'refs/heads/main'
+        run: lerna version ${{ steps.current-version.outputs.CURRENT_UPSTREAM_VERSION }} --yes --no-git-tag-version
+
       - name: publish package - pypi
         if: github.ref == 'refs/heads/main' && steps.version-was-changed.outputs.VERSION_INFO == ''
-        run: ./pw pdm publish
+        run: pdm publish
 
       # https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token
       - name: publish VSIX - visual studio marketplace
         if: github.ref == 'refs/heads/main' && steps.version-was-changed.outputs.VERSION_INFO == ''
-        run: ./node_modules/.bin/vsce publish --packagePath ${{ env.VSIX_NAME }} --pat ${{ secrets.VSCE_TOKEN }} --noVerify
+        run: vsce publish --packagePath ${{ env.VSIX_NAME }} --pat ${{ secrets.VSCE_TOKEN }} --noVerify
         working-directory: ${{ env.VSIX_DIR }}
 
       - name: publish VSIX - open VSX
         if: github.ref == 'refs/heads/main' && steps.version-was-changed.outputs.VERSION_INFO == ''
-        run: ./node_modules/.bin/ovsx publish --packagePath ${{ env.VSIX_NAME }} --pat ${{ secrets.OPEN_VSX_TOKEN }}
+        run: ovsx publish --packagePath ${{ env.VSIX_NAME }} --pat ${{ secrets.OPEN_VSX_TOKEN }}
         working-directory: ${{ env.VSIX_DIR }}
 
       - uses: marvinpinto/action-automatic-releases@v1.2.1
         if: github.ref == 'refs/heads/main' && steps.version-was-changed.outputs.VERSION_INFO == ''
         with:
+          title: v${{ steps.current-version.outputs.CURRENT_VERSION }} (pyright ${{ steps.current-version.outputs.CURRENT_UPSTREAM_VERSION }})
+          draft: true # so i can write the release notes manually before publishing it
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: false
           files: |

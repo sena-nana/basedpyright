@@ -1291,7 +1291,7 @@ function getSequencePatternInfo(
                             typeArgs.splice(tupleIndeterminateIndex, 0, typeArgs[tupleIndeterminateIndex]);
                         }
 
-                        if (typeArgs.length > patternEntryCount) {
+                        if (typeArgs.length > patternEntryCount && patternStarEntryIndex === undefined) {
                             typeArgs.splice(tupleIndeterminateIndex, 1);
                         }
                     }
@@ -1969,6 +1969,8 @@ export function getPatternSubtypeNarrowingCallback(
                         subtype.tupleTypeArguments.every((e) => !e.isUnbounded)
                     ) {
                         narrowedSubtypes.push(subtype.tupleTypeArguments[matchingEntryIndex].type);
+                    } else if (isNever(narrowedSubjectType)) {
+                        narrowedSubtypes.push(narrowedSubjectType);
                     } else {
                         canNarrow = false;
                     }

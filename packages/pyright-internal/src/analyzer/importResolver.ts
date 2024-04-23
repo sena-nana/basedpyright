@@ -16,8 +16,8 @@ import { Host } from '../common/host';
 import { stubsSuffix } from '../common/pathConsts';
 import { stripFileExtension } from '../common/pathUtils';
 import { PythonVersion, pythonVersion3_0 } from '../common/pythonVersion';
+import { ServiceKeys } from '../common/serviceKeys';
 import { ServiceProvider } from '../common/serviceProvider';
-import { ServiceKeys } from '../common/serviceProviderExtensions';
 import * as StringUtils from '../common/stringUtils';
 import { equateStringsCaseInsensitive } from '../common/stringUtils';
 import { Uri } from '../common/uri/uri';
@@ -26,7 +26,7 @@ import { isIdentifierChar, isIdentifierStartChar } from '../parser/characters';
 import { ImplicitImport, ImportResult, ImportType } from './importResult';
 import { getDirectoryLeadingDotsPointsTo } from './importStatementUtils';
 import { ImportPath, ParentDirectoryCache } from './parentDirectoryCache';
-import { PyTypedInfo, getPyTypedInfo } from './pyTypedUtils';
+import { PyTypedInfo, getPyTypedInfoForPyTypedFile } from './pyTypedUtils';
 import * as PythonPathUtils from './pythonPathUtils';
 import * as SymbolNameUtils from './symbolNameUtils';
 import { isDunderName } from './symbolNameUtils';
@@ -584,12 +584,16 @@ export class ImportResolver {
 
             this.cachedParentImportResults.checked(current!, importName, importPath);
 
-            // TODO: figure out how namespace packages work. we disable this stupid fake relative import functionality because it's wrong
-            //  (https://github.com/DetachHead/basedpyright/issues/76) but it seems like stub imports and some mysterious namespace package
-            //  functionality rely on this behavior. so for now i'm just disabling it for everything except namespace packages & stub files
-            if (result.isImportFound && (result.isNamespacePackage || result.isStubFile)) {
+            if (result.isImportFound) {
                 // This will make cache to point to actual path that contains the module we found
                 importPath.importPath = current;
+
+                if (!result.isNamespacePackage && !result.isStubFile) {
+                    // TODO: figure out how namespace packages work. we identify this fake relative import functionality as such so it can be banned
+                    // with a diagnostic rule, but it seems like stub imports and some mysterious namespace package functionality rely on this behavior.
+                    // so for now i'm just not reporting it for namespace packages & stub files
+                    result.isImplicitlyRelative = true;
+                }
 
                 this.cachedParentImportResults.add({
                     importResult: result,
@@ -899,6 +903,7 @@ export class ImportResolver {
         const notFoundResult: ImportResult = {
             importName,
             isRelative: false,
+            isImplicitlyRelative: false,
             isImportFound: false,
             isPartlyResolved: false,
             isNamespacePackage: false,
@@ -1471,6 +1476,7 @@ export class ImportResolver {
         return {
             importName,
             isRelative: false,
+            isImplicitlyRelative: false,
             isNamespacePackage,
             isInitFilePresent,
             isStubPackage,
@@ -2235,27 +2241,26 @@ export class ImportResolver {
     }
 
     private _getTypeshedRoot(customTypeshedPath: Uri | undefined, importFailureInfo: string[]) {
-        if (this._cachedTypeshedRoot !== undefined) {
-            return this._cachedTypeshedRoot;
-        }
+        if (this._cachedTypeshedRoot === undefined) {
+            let typeshedPath = undefined;
 
-        let typeshedPath = undefined;
-
-        // Did the user specify a typeshed path? If not, we'll look in the
-        // python search paths, then in the typeshed-fallback directory.
-        if (customTypeshedPath) {
-            if (this.dirExistsCached(customTypeshedPath)) {
-                typeshedPath = customTypeshedPath;
+            // Did the user specify a typeshed path? If not, we'll look in the
+            // python search paths, then in the typeshed-fallback directory.
+            if (customTypeshedPath) {
+                if (this.dirExistsCached(customTypeshedPath)) {
+                    typeshedPath = customTypeshedPath;
+                }
             }
+
+            // If typeshed directory wasn't found in other locations, use the fallback.
+            if (!typeshedPath) {
+                typeshedPath = PythonPathUtils.getTypeShedFallbackPath(this.fileSystem) ?? Uri.empty();
+            }
+
+            this._cachedTypeshedRoot = typeshedPath;
         }
 
-        // If typeshed directory wasn't found in other locations, use the fallback.
-        if (!typeshedPath) {
-            typeshedPath = PythonPathUtils.getTypeShedFallbackPath(this.fileSystem) ?? Uri.empty();
-        }
-
-        this._cachedTypeshedRoot = typeshedPath;
-        return typeshedPath;
+        return this._cachedTypeshedRoot.isEmpty() ? undefined : this._cachedTypeshedRoot;
     }
 
     private _getTypeshedSubdirectory(
@@ -2275,8 +2280,11 @@ export class ImportResolver {
         }
 
         let typeshedPath = this._getTypeshedRoot(customTypeshedPath, importFailureInfo);
-        typeshedPath = PythonPathUtils.getTypeshedSubdirectory(typeshedPath, isStdLib);
+        if (typeshedPath === undefined) {
+            return undefined;
+        }
 
+        typeshedPath = PythonPathUtils.getTypeshedSubdirectory(typeshedPath, isStdLib);
         if (!this.dirExistsCached(typeshedPath)) {
             return undefined;
         }
@@ -2709,7 +2717,8 @@ export class ImportResolver {
         if (!this.fileExistsCached(filePath.pytypedUri)) {
             return undefined;
         }
-        return getPyTypedInfo(this.fileSystem, filePath);
+
+        return getPyTypedInfoForPyTypedFile(this.fileSystem, filePath.pytypedUri);
     }
 
     private _resolveNativeModuleStub(
